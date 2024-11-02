@@ -1,4 +1,8 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:path/path.dart';
+import 'package:sqflite/sqflite.dart';
 
 void main() {
   runApp(const MyApp());
@@ -7,47 +11,21 @@ void main() {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      title: 'Bike Station App',
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const MyHomePage(title: 'Bike Station App'),
     );
   }
 }
 
 class MyHomePage extends StatefulWidget {
   const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
   final String title;
 
   @override
@@ -55,71 +33,162 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+  int _stationCount = 0;
+  final DatabaseHelper _dbHelper = DatabaseHelper();
 
-  void _incrementCounter() {
+  @override
+  void initState() {
+    super.initState();
+    _fetchAndSaveData();
+  }
+
+  // 데이터를 가져와 SQLite에 저장하는 메서드
+  Future<void> _fetchAndSaveData() async {
+    for (int page = 1; page <= 3; page++) {
+      final response = await http.get(Uri.parse(
+          'http://openapi.seoul.go.kr:8088/647269414464617537384a694b6467/json/bikeList/${(page - 1) * 1000 + 1}/${page * 1000}/'));
+
+      if (response.statusCode == 200) {
+        final jsonData = json.decode(response.body);
+        final bikeList = jsonData['rentBikeStatus']['row'];
+
+        // 데이터 저장
+        for (var item in bikeList) {
+          final bikeStation = BikeStation(
+            stationId: item['stationId'],
+            stationName: item['stationName'],
+            stationLatitude: double.parse(item['stationLatitude']),
+            stationLongitude: double.parse(item['stationLongitude']),
+            rackTotCnt: int.parse(item['rackTotCnt']),
+            parkingBikeTotCnt: int.parse(item['parkingBikeTotCnt']),
+          );
+          await _dbHelper.insertBikeStation(bikeStation);
+        }
+      } else {
+        throw Exception('Failed to load data for page $page');
+      }
+
+      setState(() {
+        print("${(page-1)*1000+1} ~ ${page*1000}번 데이터 저장 완료!");
+      });
+
+      // 데이터 로드
+      await _loadData();
+    }
+  }
+
+
+  // 저장된 데이터를 로드하는 메서드
+  Future<void> _loadData() async {
+    final stations = await _dbHelper.getBikeStations();
     setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+      _stationCount = stations.length;
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
         title: Text(widget.title),
       ),
       body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text(
-              'You have pushed the button this many times:',
-            ),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-          ],
-        ),
+        child: _stationCount == 0
+            ? const Text("Loading data...")
+            : Text("총 저장된 데이터 개수: $_stationCount"),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
     );
+  }
+}
+
+// BikeStation 모델 클래스
+class BikeStation {
+  final String stationId;
+  final String stationName;
+  final double stationLatitude;
+  final double stationLongitude;
+  final int rackTotCnt;
+  final int parkingBikeTotCnt;
+
+  BikeStation({
+    required this.stationId,
+    required this.stationName,
+    required this.stationLatitude,
+    required this.stationLongitude,
+    required this.rackTotCnt,
+    required this.parkingBikeTotCnt,
+  });
+
+  Map<String, dynamic> toMap() {
+    return {
+      'stationId': stationId,
+      'stationName': stationName,
+      'stationLatitude': stationLatitude,
+      'stationLongitude': stationLongitude,
+      'rackTotCnt': rackTotCnt,
+      'parkingBikeTotCnt': parkingBikeTotCnt,
+    };
+  }
+}
+
+// SQLite 데이터베이스 헬퍼 클래스
+class DatabaseHelper {
+  static Database? _database;
+
+  Future<Database> get database async {
+    if (_database != null) return _database!;
+    _database = await _initDatabase();
+    return _database!;
+  }
+
+  Future<Database> _initDatabase() async {
+    String path = join(await getDatabasesPath(), 'bike_station.db');
+    return await openDatabase(
+      path,
+      version: 1,
+      onCreate: (db, version) async {
+        await db.execute('''
+          CREATE TABLE bike_stations(
+            stationId TEXT PRIMARY KEY,
+            stationName TEXT,
+            stationLatitude REAL,
+            stationLongitude REAL,
+            rackTotCnt INTEGER,
+            parkingBikeTotCnt INTEGER
+          )
+        ''');
+      },
+    );
+  }
+
+  // BikeStation 객체를 DB에 삽입
+  Future<void> insertBikeStation(BikeStation station) async {
+    final db = await database;
+    await db.insert(
+      'bike_stations',
+      station.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<BikeStation>> getBikeStations() async {
+    final db = await database;
+    final List<Map<String, dynamic>> maps = await db.query('bike_stations');
+    return List.generate(maps.length, (i) {
+      return BikeStation(
+        stationId: maps[i]['stationId'],
+        stationName: maps[i]['stationName'],
+        stationLatitude: maps[i]['stationLatitude'],
+        stationLongitude: maps[i]['stationLongitude'],
+        rackTotCnt: maps[i]['rackTotCnt'],
+        parkingBikeTotCnt: maps[i]['parkingBikeTotCnt'],
+      );
+    });
+  }
+
+  // DB 연결 종료
+  Future<void> close() async {
+    final db = await database;
+    db.close();
   }
 }
