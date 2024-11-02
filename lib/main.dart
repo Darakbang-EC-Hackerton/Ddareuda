@@ -1,8 +1,9 @@
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:path/path.dart';
-import 'package:sqflite/sqflite.dart';
+import 'database_helper.dart';
+import 'bike_station.dart';
 
 void main() {
   runApp(const MyApp());
@@ -33,7 +34,9 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  int _stationCount = 0;
+  bool _isLoading = true;
+  BikeStation? _nearestStationOfStart;
+  BikeStation? _nearestStationOfEnd;
   final DatabaseHelper _dbHelper = DatabaseHelper();
 
   @override
@@ -47,7 +50,6 @@ class _MyHomePageState extends State<MyHomePage> {
     for (int page = 1; page <= 3; page++) {
       final response = await http.get(Uri.parse(
           'http://openapi.seoul.go.kr:8088/647269414464617537384a694b6467/json/bikeList/${(page - 1) * 1000 + 1}/${page * 1000}/'));
-
       if (response.statusCode == 200) {
         final jsonData = json.decode(response.body);
         final bikeList = jsonData['rentBikeStatus']['row'];
@@ -57,10 +59,10 @@ class _MyHomePageState extends State<MyHomePage> {
           final bikeStation = BikeStation(
             stationId: item['stationId'],
             stationName: item['stationName'],
-            stationLatitude: double.parse(item['stationLatitude']),
-            stationLongitude: double.parse(item['stationLongitude']),
-            rackTotCnt: int.parse(item['rackTotCnt']),
-            parkingBikeTotCnt: int.parse(item['parkingBikeTotCnt']),
+            minX: double.parse(item['stationLongitude']) - 0.0001,
+            maxX: double.parse(item['stationLongitude']) + 0.0001,
+            minY: double.parse(item['stationLatitude']) - 0.0001,
+            maxY: double.parse(item['stationLatitude']) + 0.0001,
           );
           await _dbHelper.insertBikeStation(bikeStation);
         }
@@ -69,21 +71,53 @@ class _MyHomePageState extends State<MyHomePage> {
       }
 
       setState(() {
-        print("${(page-1)*1000+1} ~ ${page*1000}번 데이터 저장 완료!");
+        print("${(page - 1) * 1000 + 1} ~ ${page * 1000}번 데이터 저장 완료!");
       });
-
-      // 데이터 로드
-      await _loadData();
     }
+    setState(() {
+      _isLoading = false;
+    });
   }
 
+  Future<void> _search() async {
+    _nearestStationOfStart = await findNearestStation(37.631855, 127.077707);
+    _nearestStationOfEnd = await findNearestStation(37.628308, 127.090843);
+    final response = await http.get(Uri.parse('https://router.project-osrm.org/route/v1/bicycle/127.077964,37.631779;127.090394,37.628897?overview=false&steps=true'));
+    print(response.body);
+  }
 
-  // 저장된 데이터를 로드하는 메서드
-  Future<void> _loadData() async {
+  // 가장 가까운 대여소를 찾는 메서드
+  Future<BikeStation?> findNearestStation(double currentLat, double currentLon) async {
     final stations = await _dbHelper.getBikeStations();
-    setState(() {
-      _stationCount = stations.length;
-    });
+    BikeStation? nearestStation;
+    double nearestDistance = double.infinity;
+
+    for (var station in stations) {
+      final centerLat = (station.minY + station.maxY) / 2;
+      final centerLon = (station.minX + station.maxX) / 2;
+
+      final distance = _calculateDistance(currentLat, currentLon, centerLat, centerLon);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestStation = station;
+      }
+    }
+    return nearestStation;
+  }
+
+  // 두 지점 사이의 거리 계산 (Haversine formula)
+  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    const R = 6371e3; // 지구의 반지름 (미터)
+    final phi1 = lat1 * (3.141592653589793 / 180);
+    final phi2 = lat2 * (3.141592653589793 / 180);
+    final deltaPhi = (lat2 - lat1) * (3.141592653589793 / 180);
+    final deltaLambda = (lon2 - lon1) * (3.141592653589793 / 180);
+
+    final a = (sin(deltaPhi / 2) * sin(deltaPhi / 2)) +
+        (cos(phi1) * cos(phi2) * sin(deltaLambda / 2) * sin(deltaLambda / 2));
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+
+    return R * c; // 미터 단위
   }
 
   @override
@@ -93,102 +127,31 @@ class _MyHomePageState extends State<MyHomePage> {
         title: Text(widget.title),
       ),
       body: Center(
-        child: _stationCount == 0
-            ? const Text("Loading data...")
-            : Text("총 저장된 데이터 개수: $_stationCount"),
+        child: _isLoading
+            ? const CircularProgressIndicator() // 로딩 인디케이터
+            : Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            ElevatedButton(
+              onPressed: _search,
+              child: const Text("경로 검색"),
+            ),
+            const SizedBox(height: 20),
+            if (_nearestStationOfStart != null) ...[
+              Text("출발 대여소"),
+              Text("위도: ${(_nearestStationOfStart!.minY + _nearestStationOfStart!.maxY) / 2}"),
+              Text("경도: ${(_nearestStationOfStart!.minX + _nearestStationOfStart!.maxX) / 2}"),
+            ],
+            if (_nearestStationOfEnd != null) ...[
+              Text("도착 대여소"),
+              Text("위도: ${(_nearestStationOfEnd!.minY + _nearestStationOfEnd!.maxY) / 2}"),
+              Text("경도: ${(_nearestStationOfEnd!.minX + _nearestStationOfEnd!.maxX) / 2}"),
+            ],
+            if (_nearestStationOfStart == null && _nearestStationOfEnd == null)
+              const Text("가장 가까운 대여소가 없습니다."),
+          ],
+        ),
       ),
     );
-  }
-}
-
-// BikeStation 모델 클래스
-class BikeStation {
-  final String stationId;
-  final String stationName;
-  final double stationLatitude;
-  final double stationLongitude;
-  final int rackTotCnt;
-  final int parkingBikeTotCnt;
-
-  BikeStation({
-    required this.stationId,
-    required this.stationName,
-    required this.stationLatitude,
-    required this.stationLongitude,
-    required this.rackTotCnt,
-    required this.parkingBikeTotCnt,
-  });
-
-  Map<String, dynamic> toMap() {
-    return {
-      'stationId': stationId,
-      'stationName': stationName,
-      'stationLatitude': stationLatitude,
-      'stationLongitude': stationLongitude,
-      'rackTotCnt': rackTotCnt,
-      'parkingBikeTotCnt': parkingBikeTotCnt,
-    };
-  }
-}
-
-// SQLite 데이터베이스 헬퍼 클래스
-class DatabaseHelper {
-  static Database? _database;
-
-  Future<Database> get database async {
-    if (_database != null) return _database!;
-    _database = await _initDatabase();
-    return _database!;
-  }
-
-  Future<Database> _initDatabase() async {
-    String path = join(await getDatabasesPath(), 'bike_station.db');
-    return await openDatabase(
-      path,
-      version: 1,
-      onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE bike_stations(
-            stationId TEXT PRIMARY KEY,
-            stationName TEXT,
-            stationLatitude REAL,
-            stationLongitude REAL,
-            rackTotCnt INTEGER,
-            parkingBikeTotCnt INTEGER
-          )
-        ''');
-      },
-    );
-  }
-
-  // BikeStation 객체를 DB에 삽입
-  Future<void> insertBikeStation(BikeStation station) async {
-    final db = await database;
-    await db.insert(
-      'bike_stations',
-      station.toMap(),
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
-  }
-
-  Future<List<BikeStation>> getBikeStations() async {
-    final db = await database;
-    final List<Map<String, dynamic>> maps = await db.query('bike_stations');
-    return List.generate(maps.length, (i) {
-      return BikeStation(
-        stationId: maps[i]['stationId'],
-        stationName: maps[i]['stationName'],
-        stationLatitude: maps[i]['stationLatitude'],
-        stationLongitude: maps[i]['stationLongitude'],
-        rackTotCnt: maps[i]['rackTotCnt'],
-        parkingBikeTotCnt: maps[i]['parkingBikeTotCnt'],
-      );
-    });
-  }
-
-  // DB 연결 종료
-  Future<void> close() async {
-    final db = await database;
-    db.close();
   }
 }
