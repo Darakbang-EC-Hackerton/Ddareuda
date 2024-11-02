@@ -35,6 +35,8 @@ dependencies:
   sqflite: ^2.0.0+4
   latlong2: ^0.8.1
   flutter_map: ^4.0.0
+  google_maps_flutter: ^2.2.5
+  flutter_dotenv: ^5.0.2
 
 
   # The following adds the Cupertino Icons font to your application.
